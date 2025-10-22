@@ -1,0 +1,254 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>Romeo–Juliet ODE — Plotly.js</title>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<style>
+  body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; background:#0f0f10; color:#ddd; }
+  #ui { padding: 10px 12px; display:flex; gap:24px; align-items:center; flex-wrap:wrap; }
+  #plot { width: 100vw; height: calc(100vh - 68px); }
+  .slider { display:flex; gap:8px; align-items:center; }
+  input[type="range"] { width: 220px; }
+  .badge { background:#1e1e22; padding:6px 8px; border-radius:6px; color:#9fa6b2; }
+</style>
+
+<div id="ui">
+  <div class="slider"><span class="badge">a</span>
+    <input id="a" type="range" min="-2" max="0" step="0.01" value="-0.5">
+    <span id="aVal">-0.5</span>
+  </div>
+  <div class="slider"><span class="badge">b</span>
+    <input id="b" type="range" min="0" max="2" step="0.01" value="0.5">
+    <span id="bVal">0.5</span>
+  </div>
+  <div class="badge">Tip: click anywhere on the plot to move the seed</div>
+</div>
+<div id="plot"></div>
+
+<script>
+const dom = {
+  plot: document.getElementById('plot'),
+  a: document.getElementById('a'),
+  b: document.getElementById('b'),
+  aVal: document.getElementById('aVal'),
+  bVal: document.getElementById('bVal')
+};
+
+const XMIN=-2, XMAX=2, YMIN=-2, YMAX=2;
+const NX=20, NY=20;                      // grid like your matplotlib code
+const ARROW_SCALE = 0.1;                // shorten arrows for readability
+const DT = 0.02, STEPS = 1000;           // RK4 integrator params
+
+function linspace(a,b,n){
+  const arr = new Array(n);
+  const h=(b-a)/(n-1);
+  for(let i=0;i<n;i++) arr[i]=a+i*h;
+  return arr;
+}
+
+const xs = linspace(XMIN, XMAX, NX);
+const ys = linspace(YMIN, YMAX, NY);
+
+// core field
+function field(a,b,x,y){ return {u: a*x + b*y, v: b*x + a*y}; }
+
+// build contour of speed (Nx×Ny grid -> Z)
+function speedGrid(a,b){
+  const Z = ys.map(y => xs.map(x => {
+    const {u,v} = field(a,b,x,y);
+    return Math.hypot(u,v);
+  }));
+  return Z;
+}
+
+// quiver-like arrows as a single scatter trace with segment breaks (nulls)
+function quiverTrace(a,b){
+  const X=[], Y=[];
+  for (let j=0;j<NY;j++){
+    for (let i=0;i<NX;i++){
+      const x=xs[i], y=ys[j];
+      const {u,v} = field(a,b,x,y);
+      const m = Math.hypot(u,v) || 1e-9;
+      const dx = (u/m)*ARROW_SCALE;
+      const dy = (v/m)*ARROW_SCALE;
+      X.push(x, x+dx, null);
+      Y.push(y, y+dy, null);
+    }
+  }
+  return {
+    type: 'scatter', mode: 'lines',
+    x: X, y: Y,
+    line: { width: 1, color: 'rgba(220,220,230,0.35)' },
+    hoverinfo: 'skip',
+    name: 'Vector field (arrows)'
+  };
+}
+
+function integrateRK4(a,b, x0,y0, dt, steps, dir=+1){
+  const xs=[], ys=[];
+  let x=x0, y=y0;
+  for (let k=0;k<steps;k++){
+    const f = (x, y) => {
+      const { u, v } = field(a, b, x, y);   // u = a*x + b*y, v = b*x + a*y
+      return { dx: dir * u, dy: dir * v };
+    };
+    const k1 = f(x,y);
+    const k2 = f(x+0.5*dt*k1.dx, y+0.5*dt*k1.dy);
+    const k3 = f(x+0.5*dt*k2.dx, y+0.5*dt*k2.dy);
+    const k4 = f(x+dt*k3.dx,     y+dt*k3.dy);
+    x += dt*(k1.dx + 2*k2.dx + 2*k3.dx + k4.dx)/6;
+    y += dt*(k1.dy + 2*k2.dy + 2*k3.dy + k4.dy)/6;
+    if (x<XMIN || x>XMAX || y<YMIN || y>YMAX) break;
+    xs.push(x); ys.push(y);
+  }
+  return {xs, ys};
+}
+
+function trajectoryTraces(a, b, x0, y0) {
+  // integrate forward only
+  const fwd = integrateRK4(a, b, x0, y0, DT, STEPS, +1);
+
+  // ensure arrays exist even if integration exits immediately
+  const X = [x0].concat(fwd.xs || []);
+  const Y = [y0].concat(fwd.ys || []);
+
+  const traj = {
+    type: 'scatter',
+    mode: 'lines',
+    x: X,
+    y: Y,
+    line: { width: 3, color: 'rgba(255, 230, 90, 0.9)' },
+    name: 'Trajectory'
+  };
+
+  const seed = {
+    type: 'scatter',
+    mode: 'markers',
+    x: [x0], y: [y0],
+    marker: { size: 8, color: 'rgba(255, 230, 90, 1.0)', line: { width: 0 } },
+    name: 'Seed'
+  };
+
+return [traj, seed];
+}
+
+function layoutBase(){
+  return {
+    paper_bgcolor:'#0f0f10', plot_bgcolor:'#0f0f10',
+    xaxis: { range:[XMIN,XMAX], zeroline:true, zerolinewidth:1, zerolinecolor:'#3a3a44',
+             gridcolor:'#202028', tickfont:{color:'#9aa0a6'}, title:'R', titlefont:{color:'#c8ccd2'} },
+    yaxis: { range:[YMIN,YMAX], scaleanchor:'x', scaleratio:1, zeroline:true,
+             zerolinewidth:1, zerolinecolor:'#3a3a44', gridcolor:'#202028',
+             tickfont:{color:'#9aa0a6'}, title:'J', titlefont:{color:'#c8ccd2'} },
+    showlegend:false,
+    margin:{l:50,r:20,t:30,b:40},
+    title:{ text:'Vector field with seeded trajectory', font:{color:'#e5e7eb'} }
+  };
+}
+
+// initial params
+let aVal = parseFloat(dom.a.value);
+let bVal = parseFloat(dom.b.value);
+dom.aVal.textContent = aVal.toFixed(2);
+dom.bVal.textContent = bVal.toFixed(2);
+
+// Initial seed (click to change)
+let seedX = 1.2, seedY = -1.0;
+function arrowAnnotationFromTrajectory(traj) {
+  const x = Array.isArray(traj.x) ? traj.x : [];
+  const y = Array.isArray(traj.y) ? traj.y : [];
+  if (x.length < 1 || y.length < 1) return [];
+
+  const n = x.length;
+  const xEnd = x[n - 1], yEnd = y[n - 1];
+
+  // Axis span → arrow sizing
+  const span = Math.max(XMAX - XMIN, YMAX - YMIN);
+  const minLen = 0.02 * span;   // 2% of span
+  const maxLen = 0.10 * span;   // 10% of span
+
+  // Try to place tail along the polyline by arc-length
+  if (n >= 2) {
+    const segLen = new Array(n - 1);
+    let total = 0;
+    for (let i = 0; i < n - 1; i++) {
+      const L = Math.hypot(x[i + 1] - x[i], y[i + 1] - y[i]);
+      segLen[i] = L; total += L;
+    }
+    if (total > 1e-9) {
+      const lastL = segLen[n - 2];
+      const target = Math.max(minLen, Math.min(3 * lastL, maxLen));
+      let need = target, k = n - 2;
+      while (k >= 0 && need > segLen[k]) { need -= segLen[k]; k--; }
+      if (k >= 0 && segLen[k] > 1e-12) {
+        const x1 = x[k], y1 = y[k], x2 = x[k+1], y2 = y[k+1];
+        const L = segLen[k], t = (L - need) / L;
+        let ax = x1 + t * (x2 - x1);
+        let ay = y1 + t * (y2 - y1);
+        const clamp = (v, lo, hi) => Math.max(lo, Math.min(v, hi));
+        ax = clamp(ax, XMIN + 1e-6, XMAX - 1e-6);
+        ay = clamp(ay, YMIN + 1e-6, YMAX - 1e-6);
+        return [{
+          x: xEnd, y: yEnd, xref: 'x', yref: 'y',
+          ax, ay, axref: 'x', ayref: 'y',
+          arrowhead: 3, arrowsize: 1.1, arrowwidth: 3,
+          arrowcolor: 'rgba(255,230,90,0.95)', showarrow: true
+        }];
+      }
+    }
+  }
+
+  // Fallback near fixed point: use local field, else dominant eigenvector
+  let { u: dirx, v: diry } = field(aVal, bVal, xEnd, yEnd);
+  if (Math.hypot(dirx, diry) < 1e-12) {
+    const lam1 = aVal + bVal, lam2 = aVal - bVal;
+    if (Math.abs(lam1) >= Math.abs(lam2)) { dirx = 1; diry = 1; }
+    else { dirx = 1; diry = -1; }
+  }
+  const Ld = Math.hypot(dirx, diry) || 1;
+  let ax = xEnd - (dirx / Ld) * minLen;
+  let ay = yEnd - (diry / Ld) * minLen;
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(v, hi));
+  ax = clamp(ax, XMIN + 1e-6, XMAX - 1e-6);
+  ay = clamp(ay, YMIN + 1e-6, YMAX - 1e-6);
+
+  return [{
+    x: xEnd, y: yEnd, xref: 'x', yref: 'y',
+    ax, ay, axref: 'x', ayref: 'y',
+    arrowhead: 3, arrowsize: 1.1, arrowwidth: 3,
+    arrowcolor: 'rgba(255,230,90,0.95)', showarrow: true
+  }];
+}
+
+function buildFigure(){
+  const Z = speedGrid(aVal,bVal);
+  const contour = { z: Z, x: xs, y: ys, type:'contour',
+    colorscale:'Viridis', contours:{showlines:false},
+    showscale:true, opacity:0.85, name:'|F|' };
+  const arrows = quiverTrace(aVal,bVal);
+
+  const [traj, seed] = trajectoryTraces(aVal, bVal, seedX, seedY);
+
+  const data = [contour, arrows, traj, seed];
+  const layout = layoutBase();
+
+  // Build the arrow from the trajectory itself
+  layout.annotations = arrowAnnotationFromTrajectory(traj);
+
+  Plotly.react(dom.plot, data, layout, { responsive:true, displayModeBar:false });
+}
+
+buildFigure();
+
+// UI events
+dom.a.addEventListener('input', (e)=>{ aVal=parseFloat(e.target.value); dom.aVal.textContent=aVal.toFixed(2); buildFigure(); });
+dom.b.addEventListener('input', (e)=>{ bVal=parseFloat(e.target.value); dom.bVal.textContent=bVal.toFixed(2); buildFigure(); });
+
+// click to move seed
+dom.plot.on('plotly_click', (evt)=>{
+  if (!evt.points || !evt.points.length) return;
+  // convert clicked pixel to data coordinates using point’s x,y
+  const p = evt.points[0];
+  seedX = p.x; seedY = p.y;
+  buildFigure();
+});
+</script>
