@@ -9,17 +9,29 @@
   .slider { display:flex; gap:8px; align-items:center; }
   input[type="range"] { width: 220px; }
   .badge { background:#1e1e22; padding:6px 8px; border-radius:6px; color:#9fa6b2; }
+  .btn { cursor:pointer; padding:6px 10px; border-radius:6px; border:1px solid #3a3a44; background:#17171b; color:#ddd; }
+  .btn:hover { background:#1f1f25; }
+  .btn.active { background:#2a2a33; border-color:#5a5a66; }
 </style>
 
 <div id="ui">
-  <div class="slider"><span class="badge">a</span>
-    <input id="a" type="range" min="-2" max="0" step="0.01" value="-0.5">
-    <span id="aVal">-0.5</span>
+  <div class="slider" style="gap:12px; flex-wrap:wrap">
+    <button id="btnCase1" class="btn active">Romeo loves Juliet equally (dX=Y, dY=X)</button>
+    <button id="btnCase2" class="btn">Juliet loves haters (dX=Y, dY=-X)</button>
+    <button id="btnCase3" class="btn">Cautious/Responsive (dX=a·X + b·Y, dY=b·X + a·Y)</button>
   </div>
-  <div class="slider"><span class="badge">b</span>
-    <input id="b" type="range" min="0" max="2" step="0.01" value="0.5">
-    <span id="bVal">0.5</span>
+
+  <div id="paramPanel" style="display:none; gap:24px; align-items:center; flex-wrap:wrap">
+    <div class="slider"><span class="badge">a</span>
+      <input id="a" type="range" min="-2" max="2" step="0.01" value="-0.5">
+      <span id="aVal">-0.50</span>
+    </div>
+    <div class="slider"><span class="badge">b</span>
+      <input id="b" type="range" min="-2" max="2" step="0.01" value="0.5">
+      <span id="bVal">1.00</span>
+    </div>
   </div>
+
   <div class="badge">Tip: click anywhere on the plot to move the seed</div>
 </div>
 <div id="plot"></div>
@@ -32,6 +44,11 @@ const dom = {
   aVal: document.getElementById('aVal'),
   bVal: document.getElementById('bVal')
 };
+dom.btn1 = document.getElementById('btnCase1');
+dom.btn2 = document.getElementById('btnCase2');
+dom.btn3 = document.getElementById('btnCase3');
+dom.paramPanel = document.getElementById('paramPanel');
+let mode = 'case1'; // 'case1' | 'case2' | 'case3'
 
 const XMIN=-2, XMAX=2, YMIN=-2, YMAX=2;
 const NX=20, NY=20;                      // grid like your matplotlib code
@@ -49,7 +66,28 @@ const xs = linspace(XMIN, XMAX, NX);
 const ys = linspace(YMIN, YMAX, NY);
 
 // core field
-function field(a,b,x,y){ return {u: a*x + b*y, v: b*x + a*y}; }
+// Helper: dense invisible marker grid for hover capture
+function hoverCaptureTrace(res = 160) {
+  const X = [], Y = [];
+  for (let j = 0; j < res; j++) {
+    const yy = YMIN + j * (YMAX - YMIN) / (res - 1);
+    for (let i = 0; i < res; i++) {
+      const xx = XMIN + i * (XMAX - XMIN) / (res - 1);
+      X.push(xx); Y.push(yy);
+    }
+  }
+  return {
+    type: 'scatter', mode: 'markers',
+    x: X, y: Y,
+    marker: { size: 6, opacity: 0 }, // invisible but hoverable
+    hoverinfo: 'skip', showlegend: false, name: '_hovercap'
+  };
+}
+function field(a,b,x,y){
+  if (mode === 'case1') return { u: y,  v: x  };     // P=Y,   Q=X
+  if (mode === 'case2') return { u: y,  v: -x };     // P=Y,   Q=-X
+  return { u: a*x + b*y, v: b*x + a*y };             // case3: linear combo
+}
 
 // build contour of speed (Nx×Ny grid -> Z)
 function speedGrid(a,b){
@@ -151,8 +189,18 @@ let bVal = parseFloat(dom.b.value);
 dom.aVal.textContent = aVal.toFixed(2);
 dom.bVal.textContent = bVal.toFixed(2);
 
-// Initial seed (click to change)
-let seedX = 1.2, seedY = -1.0;
+let seedX = null, seedY = null;
+
+
+
+let _handlersBound = false;
+function onPlotClick(evt){
+  if (!evt.points || !evt.points.length) return;
+  const p = evt.points[0];
+  seedX = p.x; seedY = p.y;
+  buildFigure();
+}
+
 function arrowAnnotationFromTrajectory(traj) {
   const x = Array.isArray(traj.x) ? traj.x : [];
   const y = Array.isArray(traj.y) ? traj.y : [];
@@ -226,29 +274,47 @@ function buildFigure(){
     showscale:true, opacity:0.85, name:'|F|' };
   const arrows = quiverTrace(aVal,bVal);
 
-  const [traj, seed] = trajectoryTraces(aVal, bVal, seedX, seedY);
-
-  const data = [contour, arrows, traj, seed];
+  const hovercap = hoverCaptureTrace(160);
+  const data = [hovercap, contour, arrows];
   const layout = layoutBase();
 
-  // Build the arrow from the trajectory itself
-  layout.annotations = arrowAnnotationFromTrajectory(traj);
+  let traj = null, seed = null;
+  if (seedX !== null && seedY !== null) {
+    [traj, seed] = trajectoryTraces(aVal, bVal, seedX, seedY);
+    data.push(traj, seed);
+    layout.annotations = arrowAnnotationFromTrajectory(traj);
+  }
 
+  // render
   Plotly.react(dom.plot, data, layout, { responsive:true, displayModeBar:false });
+
+  // bind hover handler once, after the plot has been created at least once
+  if (!_handlersBound && typeof dom.plot.on === 'function') {
+    dom.plot.on('plotly_click', onPlotClick);
+    _handlersBound = true;
+  }
 }
 
-buildFigure();
+function setMode(m){
+  mode = m;
+  // toggle active classes
+  dom.btn1.classList.toggle('active', m==='case1');
+  dom.btn2.classList.toggle('active', m==='case2');
+  dom.btn3.classList.toggle('active', m==='case3');
+  // show sliders only for case3
+  dom.paramPanel.style.display = (m==='case3') ? 'flex' : 'none';
+  buildFigure();
+}
 
 // UI events
 dom.a.addEventListener('input', (e)=>{ aVal=parseFloat(e.target.value); dom.aVal.textContent=aVal.toFixed(2); buildFigure(); });
 dom.b.addEventListener('input', (e)=>{ bVal=parseFloat(e.target.value); dom.bVal.textContent=bVal.toFixed(2); buildFigure(); });
 
-// click to move seed
-dom.plot.on('plotly_click', (evt)=>{
-  if (!evt.points || !evt.points.length) return;
-  // convert clicked pixel to data coordinates using point’s x,y
-  const p = evt.points[0];
-  seedX = p.x; seedY = p.y;
-  buildFigure();
-});
+dom.btn1.addEventListener('click', ()=> setMode('case1'));
+dom.btn2.addEventListener('click', ()=> setMode('case2'));
+dom.btn3.addEventListener('click', ()=> setMode('case3'));
+
+
+buildFigure();
+setMode('case1');
 </script>
